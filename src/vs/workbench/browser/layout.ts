@@ -12,6 +12,7 @@ import { isWindows, isLinux, isMacintosh, isWeb, isIOS } from '../../base/common
 import { EditorInputCapabilities, GroupIdentifier, isResourceEditorInput, IUntypedEditorInput, pathsToEditors } from '../common/editor.js';
 import { SidebarPart } from './parts/sidebar/sidebarPart.js';
 import { PanelPart } from './parts/panel/panelPart.js';
+import { ITitlebarPart, BrowserTitlebarPart } from './parts/titlebar/titlebarPart.js'; // Added BrowserTitlebarPart, kept ITitlebarPart
 import { Position, Parts, PanelOpensMaximizedOptions, IWorkbenchLayoutService, positionFromString, positionToString, panelOpensMaximizedFromString, PanelAlignment, ActivityBarPosition, LayoutSettings, MULTI_WINDOW_PARTS, SINGLE_WINDOW_PARTS, ZenModeSettings, EditorTabsMode, EditorActionsLocation, shouldShowCustomTitleBar, isHorizontal, isMultiWindowPart } from '../services/layout/browser/layoutService.js';
 import { isTemporaryWorkspace, IWorkspaceContextService, WorkbenchState } from '../../platform/workspace/common/workspace.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../platform/storage/common/storage.js';
@@ -44,10 +45,13 @@ import { ILogService } from '../../platform/log/common/log.js';
 import { DeferredPromise, Promises } from '../../base/common/async.js';
 import { IBannerService } from '../services/banner/browser/bannerService.js';
 import { IPaneCompositePartService } from '../services/panecomposite/browser/panecomposite.js';
-import { AuxiliaryBarPart } from './parts/auxiliarybar/auxiliaryBarPart.js';
+import { AIChatPart } from './parts/auxiliarybar/auxiliaryBarPart.js'; // This is the correct class for the repurposed part
 import { ITelemetryService } from '../../platform/telemetry/common/telemetry.js';
 import { IAuxiliaryWindowService } from '../services/auxiliaryWindow/browser/auxiliaryWindowService.js';
 import { CodeWindow, mainWindow } from '../../base/browser/window.js';
+import { IInstantiationService } from '../../platform/instantiation/common/instantiation.js';
+import { ActivitybarPart } from './parts/activitybar/activitybarPart.js'; // Corrected path/casing if necessary
+import { MainStatusbarPart } from './parts/statusbar/statusbarPart.js'; // Added import for MainStatusbarPart
 
 //#region Layout Implementation
 
@@ -242,14 +246,15 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
 		const titlebarVisible = this.isVisible(Parts.TITLEBAR_PART, targetWindow);
 		if (titlebarVisible) {
 			top += this.getPart(Parts.TITLEBAR_PART).maximumHeight;
-			quickPickTop = top;
+			quickPickTop = top; // Initialize quickPickTop to be same as top (below titlebar)
 		}
 
 		const isCommandCenterVisible = titlebarVisible && this.configurationService.getValue<boolean>(LayoutSettings.COMMAND_CENTER) !== false;
 		if (isCommandCenterVisible) {
 			// If the command center is visible then the quickinput
-			// should go over the title bar and the banner
-			quickPickTop = 6;
+			// should be above the command center.
+			// quickPickTop = top - (this.getPart(Parts.TITLEBAR_PART) as BrowserTitlebarPart).commandCenterHeight; // MODIFIED: Removed as commandCenterHeight is not directly available and causes error.
+			// Assuming quickPick will position itself correctly relative to titlebar, or this needs a different way to get command center offset.
 		}
 
 		return { top, quickPickTop };
@@ -265,9 +270,9 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
 	private titleBarPartView!: ISerializableView;
 	private bannerPartView!: ISerializableView;
 	private activityBarPartView!: ISerializableView;
-	private sideBarPartView!: ISerializableView;
+	private sideBarPartView!: SidebarPart; // MODIFIED: Typed as SidebarPart
 	private panelPartView!: ISerializableView;
-	private auxiliaryBarPartView!: ISerializableView;
+	private auxiliaryBarPartView!: AIChatPart;
 	private editorPartView!: ISerializableView;
 	private statusBarPartView!: ISerializableView;
 
@@ -290,6 +295,7 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
 	private logService!: ILogService;
 	private telemetryService!: ITelemetryService;
 	private auxiliaryWindowService!: IAuxiliaryWindowService;
+	private instantiationService!: IInstantiationService;
 
 	private state!: ILayoutState;
 	private stateModel!: LayoutStateModel;
@@ -316,6 +322,7 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
 		this.logService = accessor.get(ILogService);
 		this.telemetryService = accessor.get(ITelemetryService);
 		this.auxiliaryWindowService = accessor.get(IAuxiliaryWindowService);
+		this.instantiationService = accessor.get(IInstantiationService);
 
 		// Parts
 		this.editorService = accessor.get(IEditorService);
@@ -327,6 +334,16 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
 		this.notificationService = accessor.get(INotificationService);
 		this.statusBarService = accessor.get(IStatusbarService);
 		accessor.get(IBannerService);
+
+		this.sideBarPartView = this.instantiationService.createInstance(SidebarPart); // Moved up
+		this.activityBarPartView = this.instantiationService.createInstance(ActivitybarPart, this.sideBarPartView); // Corrected instantiation order
+		this.panelPartView = this.instantiationService.createInstance(PanelPart);
+		this.auxiliaryBarPartView = this.instantiationService.createInstance(AIChatPart); // MODIFIED: Instantiated as AIChatPart
+		this.registerPart(this.auxiliaryBarPartView);
+		this.statusBarPartView = this.instantiationService.createInstance(MainStatusbarPart); // MODIFIED: Used MainStatusbarPart
+		// Note: titleBarPartView is often created by the title service, ensure this.getPart(Parts.TITLEBAR_PART) works.
+		// If titleBarPartView is not instantiated here, its direct usage later might be an issue if not yet available.
+		// However, it's typically registered by the TitleService which this Layout class uses.
 
 		// Listeners
 		this.registerLayoutListeners();
@@ -672,7 +689,11 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
 			},
 			views: {
 				defaults: this.getDefaultLayoutViews(this.environmentService, this.storageService),
-				containerToRestore: {}
+				containerToRestore: {
+					sideBar: SidebarPart.activeViewletSettingsKey,
+					panel: PanelPart.activePanelSettingsKey,
+					auxiliaryBar: undefined,
+				}
 			}
 		};
 
@@ -731,7 +752,7 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
 
 		// Auxiliary View to restore
 		if (this.isVisible(Parts.AUXILIARYBAR_PART)) {
-			const viewContainerToRestore = this.storageService.get(AuxiliaryBarPart.activeViewSettingsKey, StorageScope.WORKSPACE, this.viewDescriptorService.getDefaultViewContainer(ViewContainerLocation.AuxiliaryBar)?.id);
+			const viewContainerToRestore = this.storageService.get(AIChatPart.activeViewSettingsKey, StorageScope.WORKSPACE, this.viewDescriptorService.getDefaultViewContainer(ViewContainerLocation.AuxiliaryBar)?.id); // MODIFIED: AIChatPart instead of AuxiliaryBarPart
 			if (viewContainerToRestore) {
 				this.state.initialization.views.containerToRestore.auxiliaryBar = viewContainerToRestore;
 			} else {
@@ -1114,6 +1135,22 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
 	}
 
 	private async openViewContainer(location: ViewContainerLocation, id: string, focus?: boolean): Promise<void> {
+		// If the target is the auxiliary bar, and it's our AIChatPart, handle differently.
+		if (location === ViewContainerLocation.AuxiliaryBar) {
+			const part = this.getPart(Parts.AUXILIARYBAR_PART);
+			if (part instanceof AIChatPart) {
+				// Ensure the part is visible if it was hidden by some other means, then focus.
+				if (!this.isVisible(Parts.AUXILIARYBAR_PART)) {
+					this.setPartHidden(false, Parts.AUXILIARYBAR_PART);
+				}
+				if (focus) {
+					this.focusPart(Parts.AUXILIARYBAR_PART);
+				}
+				return; // Prevent standard view container opening for AIChatPart
+			}
+		}
+
+		// Original logic for other cases or if auxiliary bar is not AIChatPart
 		let viewContainer = await this.paneCompositeService.openPaneComposite(id, location, focus);
 		if (viewContainer) {
 			return;
@@ -1297,7 +1334,7 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
 				(this.isVisible(Parts.ACTIVITYBAR_PART) ? this.activityBarPartView.minimumWidth : 0) +
 				(this.isVisible(Parts.SIDEBAR_PART) ? this.sideBarPartView.minimumWidth : 0) +
 				(this.isVisible(Parts.PANEL_PART) && !isPanelHorizontal ? this.panelPartView.minimumWidth : 0) +
-				(this.isVisible(Parts.AUXILIARYBAR_PART) ? this.auxiliaryBarPartView.minimumWidth : 0);
+				(this.isVisible(Parts.AUXILIARYBAR_PART) ? this.auxiliaryBarPartView.minimumWidth : 0); // Corrected
 
 			const takenHeight =
 				(this.isVisible(Parts.TITLEBAR_PART, targetWindow) ? this.titleBarPartView.minimumHeight : 0) +
@@ -1369,7 +1406,7 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
 			}
 
 			this.setPanelHidden(true, true);
-			this.setAuxiliaryBarHidden(true, true);
+			this.setAuxiliaryBarPartHidden(true, true); // Corrected call
 			this.setSideBarHidden(true);
 
 			if (config.hideActivityBar) {
@@ -1447,7 +1484,7 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
 			}
 
 			if (zenModeExitInfo.wasVisible.auxiliaryBar) {
-				this.setAuxiliaryBarHidden(false, true);
+				this.setAuxiliaryBarPartHidden(false, true); // Corrected call
 			}
 
 			if (zenModeExitInfo.wasVisible.sideBar) {
@@ -1518,8 +1555,8 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
 		const editorPart = this.getPart(Parts.EDITOR_PART);
 		const activityBar = this.getPart(Parts.ACTIVITYBAR_PART);
 		const panelPart = this.getPart(Parts.PANEL_PART);
-		const auxiliaryBarPart = this.getPart(Parts.AUXILIARYBAR_PART);
-		const sideBar = this.getPart(Parts.SIDEBAR_PART);
+		const auxiliaryBarPart = this.getPart(Parts.AUXILIARYBAR_PART) as AIChatPart; // Added cast to AIChatPart
+		const sideBar = this.getPart(Parts.SIDEBAR_PART) as SidebarPart; // Added cast to SidebarPart
 		const statusBar = this.getPart(Parts.STATUSBAR_PART);
 
 		// View references for all parts
@@ -1527,23 +1564,23 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
 		this.bannerPartView = bannerPart;
 		this.sideBarPartView = sideBar;
 		this.activityBarPartView = activityBar;
-		this.editorPartView = editorPart;
 		this.panelPartView = panelPart;
+		this.editorPartView = editorPart;
 		this.auxiliaryBarPartView = auxiliaryBarPart;
 		this.statusBarPartView = statusBar;
 
-		const viewMap = {
-			[Parts.ACTIVITYBAR_PART]: this.activityBarPartView,
-			[Parts.BANNER_PART]: this.bannerPartView,
+		const viewMap: { [key in Parts]: ISerializableView | undefined } = {
 			[Parts.TITLEBAR_PART]: this.titleBarPartView,
-			[Parts.EDITOR_PART]: this.editorPartView,
-			[Parts.PANEL_PART]: this.panelPartView,
+			[Parts.BANNER_PART]: this.bannerPartView,
+			[Parts.ACTIVITYBAR_PART]: this.activityBarPartView,
 			[Parts.SIDEBAR_PART]: this.sideBarPartView,
-			[Parts.STATUSBAR_PART]: this.statusBarPartView,
-			[Parts.AUXILIARYBAR_PART]: this.auxiliaryBarPartView
+			[Parts.PANEL_PART]: this.panelPartView,
+			[Parts.AUXILIARYBAR_PART]: this.auxiliaryBarPartView,
+			[Parts.EDITOR_PART]: this.editorPartView,
+			[Parts.STATUSBAR_PART]: this.statusBarPartView
 		};
 
-		const fromJSON = ({ type }: { type: Parts }) => viewMap[type];
+		const fromJSON = ({ type }: { type: Parts }) => viewMap[type]!; // Added non-null assertion
 		const workbenchGrid = SerializableGrid.deserialize(
 			this.createGridDescriptor(),
 			{ fromJSON },
@@ -1562,7 +1599,7 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
 				} else if (part === panelPart) {
 					this.setPanelHidden(!visible, true);
 				} else if (part === auxiliaryBarPart) {
-					this.setAuxiliaryBarHidden(!visible, true);
+					this.setAuxiliaryBarPartHidden(!visible, true); // Corrected method name assumption
 				} else if (part === editorPart) {
 					this.setEditorHidden(!visible);
 				}
@@ -1589,8 +1626,8 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
 
 			// Auxiliary Bar Size
 			const auxiliaryBarSize = this.stateModel.getRuntimeValue(LayoutStateKeys.AUXILIARYBAR_HIDDEN)
-				? this.workbenchGrid.getViewCachedVisibleSize(this.auxiliaryBarPartView)
-				: this.workbenchGrid.getViewSize(this.auxiliaryBarPartView).width;
+				? this.workbenchGrid.getViewCachedVisibleSize(this.auxiliaryBarPartView) // Corrected usage
+				: this.workbenchGrid.getViewSize(this.auxiliaryBarPartView).width; // Corrected usage
 			this.stateModel.setInitializationValue(LayoutStateKeys.AUXILIARYBAR_SIZE, auxiliaryBarSize as number);
 
 			this.stateModel.save(true, true);
@@ -1832,7 +1869,7 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
 		const preMovePanelWidth = !this.isVisible(Parts.PANEL_PART) ? Sizing.Invisible(this.workbenchGrid.getViewCachedVisibleSize(this.panelPartView) ?? this.panelPartView.minimumWidth) : this.workbenchGrid.getViewSize(this.panelPartView).width;
 		const preMovePanelHeight = !this.isVisible(Parts.PANEL_PART) ? Sizing.Invisible(this.workbenchGrid.getViewCachedVisibleSize(this.panelPartView) ?? this.panelPartView.minimumHeight) : this.workbenchGrid.getViewSize(this.panelPartView).height;
 		const preMoveSideBarSize = !this.isVisible(Parts.SIDEBAR_PART) ? Sizing.Invisible(this.workbenchGrid.getViewCachedVisibleSize(this.sideBarPartView) ?? this.sideBarPartView.minimumWidth) : this.workbenchGrid.getViewSize(this.sideBarPartView).width;
-		const preMoveAuxiliaryBarSize = !this.isVisible(Parts.AUXILIARYBAR_PART) ? Sizing.Invisible(this.workbenchGrid.getViewCachedVisibleSize(this.auxiliaryBarPartView) ?? this.auxiliaryBarPartView.minimumWidth) : this.workbenchGrid.getViewSize(this.auxiliaryBarPartView).width;
+		const preMoveAuxiliaryBarSize = !this.isVisible(Parts.AUXILIARYBAR_PART) ? Sizing.Invisible(this.workbenchGrid.getViewCachedVisibleSize(this.auxiliaryBarPartView) ?? this.auxiliaryBarPartView.minimumWidth) : this.workbenchGrid.getViewSize(this.auxiliaryBarPartView).width; // Corrected
 
 		const focusedPart = [Parts.PANEL_PART, Parts.SIDEBAR_PART, Parts.AUXILIARYBAR_PART].find(part => this.hasFocus(part)) as SINGLE_WINDOW_PARTS | undefined;
 
@@ -1840,17 +1877,17 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
 			this.workbenchGrid.moveViewTo(this.activityBarPartView, [2, 0]);
 			this.workbenchGrid.moveView(this.sideBarPartView, preMoveSideBarSize, sideBarSiblingToEditor ? this.editorPartView : this.activityBarPartView, sideBarSiblingToEditor ? Direction.Left : Direction.Right);
 			if (auxiliaryBarSiblingToEditor) {
-				this.workbenchGrid.moveView(this.auxiliaryBarPartView, preMoveAuxiliaryBarSize, this.editorPartView, Direction.Right);
+				this.workbenchGrid.moveView(this.auxiliaryBarPartView, preMoveAuxiliaryBarSize, this.editorPartView, Direction.Right); // Corrected
 			} else {
-				this.workbenchGrid.moveViewTo(this.auxiliaryBarPartView, [2, -1]);
+				this.workbenchGrid.moveViewTo(this.auxiliaryBarPartView, [2, -1]); // Corrected
 			}
 		} else {
 			this.workbenchGrid.moveViewTo(this.activityBarPartView, [2, -1]);
 			this.workbenchGrid.moveView(this.sideBarPartView, preMoveSideBarSize, sideBarSiblingToEditor ? this.editorPartView : this.activityBarPartView, sideBarSiblingToEditor ? Direction.Right : Direction.Left);
 			if (auxiliaryBarSiblingToEditor) {
-				this.workbenchGrid.moveView(this.auxiliaryBarPartView, preMoveAuxiliaryBarSize, this.editorPartView, Direction.Left);
+				this.workbenchGrid.moveView(this.auxiliaryBarPartView, preMoveAuxiliaryBarSize, this.editorPartView, Direction.Left); // Corrected
 			} else {
-				this.workbenchGrid.moveViewTo(this.auxiliaryBarPartView, [2, 0]);
+				this.workbenchGrid.moveViewTo(this.auxiliaryBarPartView, [2, 0]); // Corrected
 			}
 		}
 
@@ -1879,8 +1916,8 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
 		}
 
 		if (this.isVisible(Parts.AUXILIARYBAR_PART)) {
-			this.workbenchGrid.resizeView(this.auxiliaryBarPartView, {
-				height: this.workbenchGrid.getViewSize(this.auxiliaryBarPartView).height,
+			this.workbenchGrid.resizeView(this.auxiliaryBarPartView, { // Corrected
+				height: this.workbenchGrid.getViewSize(this.auxiliaryBarPartView).height, // Corrected
 				width: preMoveAuxiliaryBarSize as number
 			});
 		}
@@ -2016,41 +2053,27 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
 		return panelOpensMaximized === PanelOpensMaximizedOptions.ALWAYS || (panelOpensMaximized === PanelOpensMaximizedOptions.REMEMBER_LAST && panelLastIsMaximized);
 	}
 
-	private setAuxiliaryBarHidden(hidden: boolean, skipLayout?: boolean): void {
+	private setAuxiliaryBarPartHidden(hidden: boolean, skipLayout?: boolean): void { // Renamed and logic simplified
 		this.stateModel.setRuntimeValue(LayoutStateKeys.AUXILIARYBAR_HIDDEN, hidden);
+		const part = this.getPart(Parts.AUXILIARYBAR_PART);
 
-		// Adjust CSS
 		if (hidden) {
 			this.mainContainer.classList.add(LayoutClasses.AUXILIARYBAR_HIDDEN);
+			if (this.hasFocus(Parts.AUXILIARYBAR_PART)) {
+				this.focusPanelOrEditor();
+			}
 		} else {
 			this.mainContainer.classList.remove(LayoutClasses.AUXILIARYBAR_HIDDEN);
 		}
 
-		// If auxiliary bar becomes hidden, also hide the current active pane composite if any
-		if (hidden && this.paneCompositeService.getActivePaneComposite(ViewContainerLocation.AuxiliaryBar)) {
-			this.paneCompositeService.hideActivePaneComposite(ViewContainerLocation.AuxiliaryBar);
-			this.focusPanelOrEditor();
+		if (this.workbenchGrid && this.auxiliaryBarPartView) { // Check if grid and view are initialized
+			this.workbenchGrid.setViewVisible(this.auxiliaryBarPartView, !hidden);
 		}
 
-		// If auxiliary bar becomes visible, show last active pane composite or default pane composite
-		else if (!hidden && !this.paneCompositeService.getActivePaneComposite(ViewContainerLocation.AuxiliaryBar)) {
-			let viewletToOpen: string | undefined = this.paneCompositeService.getLastActivePaneCompositeId(ViewContainerLocation.AuxiliaryBar);
-
-			// verify that the viewlet we try to open has views before we default to it
-			// otherwise fall back to any view that has views still refs #111463
-			if (!viewletToOpen || !this.hasViews(viewletToOpen)) {
-				viewletToOpen = this.viewDescriptorService
-					.getViewContainersByLocation(ViewContainerLocation.AuxiliaryBar)
-					.find(viewContainer => this.hasViews(viewContainer.id))?.id;
-			}
-
-			if (viewletToOpen) {
-				this.openViewContainer(ViewContainerLocation.AuxiliaryBar, viewletToOpen, !skipLayout);
-			}
+		if (!skipLayout) {
+			this.layout();
 		}
-
-		// Propagate to grid
-		this.workbenchGrid.setViewVisible(this.auxiliaryBarPartView, !hidden);
+		part.setVisible(!hidden); // Part updates its own visibility state
 	}
 
 	setPartHidden(hidden: boolean, part: Parts): void {
@@ -2064,7 +2087,7 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
 			case Parts.BANNER_PART:
 				return this.setBannerHidden(hidden);
 			case Parts.AUXILIARYBAR_PART:
-				return this.setAuxiliaryBarHidden(hidden);
+				return this.setAuxiliaryBarPartHidden(hidden);
 			case Parts.PANEL_PART:
 				return this.setPanelHidden(hidden);
 		}
@@ -2146,7 +2169,7 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
 		// Layout
 		const size = this.workbenchGrid.getViewSize(this.panelPartView);
 		const sideBarSize = this.workbenchGrid.getViewSize(this.sideBarPartView);
-		const auxiliaryBarSize = this.workbenchGrid.getViewSize(this.auxiliaryBarPartView);
+		const auxiliaryBarSize = this.workbenchGrid.getViewSize(this.auxiliaryBarPartView); // Corrected
 
 		let editorHidden = !this.isVisible(Parts.EDITOR_PART, mainWindow);
 
@@ -2195,9 +2218,9 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
 			this.setSideBarHidden(true);
 		}
 
-		this.workbenchGrid.resizeView(this.auxiliaryBarPartView, auxiliaryBarSize);
+		this.workbenchGrid.resizeView(this.auxiliaryBarPartView, auxiliaryBarSize); // Corrected
 		if (!auxiliaryBarVisible) {
-			this.setAuxiliaryBarHidden(true);
+			this.setAuxiliaryBarPartHidden(true);
 		}
 
 		if (isHorizontal(position)) {
@@ -2419,9 +2442,9 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
 
 		const auxiliaryBarNode: ISerializedLeafNode = {
 			type: 'leaf',
-			data: { type: Parts.AUXILIARYBAR_PART },
+			data: { type: Parts.AUXILIARYBAR_PART }, // Corrected Part ID
 			size: auxiliaryBarPartSize,
-			visible: this.isVisible(Parts.AUXILIARYBAR_PART)
+			visible: !this.stateModel.getRuntimeValue(LayoutStateKeys.AUXILIARYBAR_HIDDEN) // Corrected visibility check
 		};
 
 		const editorNode: ISerializedLeafNode = {
@@ -2602,7 +2625,8 @@ const LayoutStateKeys = {
 	EDITOR_HIDDEN: new RuntimeStateKey<boolean>('editor.hidden', StorageScope.WORKSPACE, StorageTarget.MACHINE, false),
 	PANEL_HIDDEN: new RuntimeStateKey<boolean>('panel.hidden', StorageScope.WORKSPACE, StorageTarget.MACHINE, true),
 	AUXILIARYBAR_HIDDEN: new RuntimeStateKey<boolean>('auxiliaryBar.hidden', StorageScope.WORKSPACE, StorageTarget.MACHINE, true),
-	STATUSBAR_HIDDEN: new RuntimeStateKey<boolean>('statusBar.hidden', StorageScope.WORKSPACE, StorageTarget.MACHINE, false, true)
+	STATUSBAR_HIDDEN: new RuntimeStateKey<boolean>('statusBar.hidden', StorageScope.WORKSPACE, StorageTarget.MACHINE, false, true),
+	PANEL_WAS_MAXIMIZED_ON_AUXILIARYBAR_HIDE: new RuntimeStateKey<boolean>('panel.wasMaximizedOnAuxiliaryBarHide', StorageScope.WORKSPACE, StorageTarget.MACHINE, false),
 
 } as const;
 

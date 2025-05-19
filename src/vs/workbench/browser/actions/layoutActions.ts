@@ -34,6 +34,7 @@ import { TitlebarStyle } from '../../../platform/window/common/window.js';
 import { IPreferencesService } from '../../services/preferences/common/preferences.js';
 import { QuickInputAlignmentContextKey } from '../../../platform/quickinput/browser/quickInput.js';
 import { IEditorGroupsService } from '../../services/editor/common/editorGroupsService.js';
+import { RawContextKey } from '../../../platform/contextkey/common/contextkey.js';
 
 // Register Icons
 const menubarIcon = registerIcon('menuBar', Codicon.layoutMenubar, localize('menuBarIcon', "Represents the menu bar"));
@@ -42,8 +43,8 @@ const activityBarRightIcon = registerIcon('activity-bar-right', Codicon.layoutAc
 const panelLeftIcon = registerIcon('panel-left', Codicon.layoutSidebarLeft, localize('panelLeft', "Represents a side bar in the left position"));
 const panelLeftOffIcon = registerIcon('panel-left-off', Codicon.layoutSidebarLeftOff, localize('panelLeftOff', "Represents a side bar in the left position toggled off"));
 const panelRightIcon = registerIcon('panel-right', Codicon.layoutSidebarRight, localize('panelRight', "Represents side bar in the right position"));
-const panelRightOffIcon = registerIcon('panel-right-off', Codicon.layoutSidebarRightOff, localize('panelRightOff', "Represents side bar in the right position toggled off"));
-const panelIcon = registerIcon('panel-bottom', Codicon.layoutPanel, localize('panelBottom', "Represents the bottom panel"));
+const panelRightOffIcon = registerIcon('panel-right-off', Codicon.layoutSidebarRightOff, localize('panelRightOffIcon', "Icon for the right panel when it's off."));
+const panelIcon = registerIcon('panel-icon', Codicon.layoutPanel, localize('panelIcon', "Icon for the panel."));
 const statusBarIcon = registerIcon('statusBar', Codicon.layoutStatusbar, localize('statusBarIcon', "Represents the status bar"));
 
 const panelAlignmentLeftIcon = registerIcon('panel-align-left', Codicon.layoutPanelLeft, localize('panelBottomLeft', "Represents the bottom panel alignment set to the left"));
@@ -57,6 +58,54 @@ const quickInputAlignmentCenterIcon = registerIcon('quickInputAlignmentCenter', 
 const fullscreenIcon = registerIcon('fullscreen', Codicon.screenFull, localize('fullScreenIcon', "Represents full screen"));
 const centerLayoutIcon = registerIcon('centerLayoutIcon', Codicon.layoutCentered, localize('centerLayoutIcon', "Represents centered layout mode"));
 const zenModeIcon = registerIcon('zenMode', Codicon.target, localize('zenModeIcon', "Represents zen mode"));
+
+// --- Placeholder Toggle Action
+const placeholderToggleIconOff = registerIcon('placeholder-toggle-off', Codicon.gear, localize('placeholderToggleIconOff', "Icon for the placeholder toggle action when off."));
+const placeholderToggleIconOn = registerIcon('placeholder-toggle-on', Codicon.zap, localize('placeholderToggleIconOn', "Icon for the placeholder toggle action when on."));
+
+const PlaceholderToggleActiveContext = new RawContextKey<boolean>('placeholderToggleActive', false, localize('placeholderToggleActiveContext', "Whether the placeholder toggle is active"));
+
+class PlaceholderToggleAction extends Action2 {
+	constructor() {
+		super({
+			id: 'workbench.action.placeholderToggle',
+			title: localize2('placeholderToggleCmdTitle', "Toggle Placeholder Feature"), // Command palette title
+			f1: true // Let's make it appear in command palette for testing
+			// Icon and toggled state will be defined in the menu item for LayoutControlMenu
+		});
+	}
+
+	run(accessor: ServicesAccessor): void {
+		const contextKeyService = accessor.get(IContextKeyService);
+		const isActive = PlaceholderToggleActiveContext.getValue(contextKeyService);
+		PlaceholderToggleActiveContext.bindTo(contextKeyService).set(!isActive);
+		console.log('Placeholder Toggle Clicked! New state:', !isActive);
+	}
+}
+registerAction2(PlaceholderToggleAction);
+
+MenuRegistry.appendMenuItem(MenuId.LayoutControlMenu, {
+	group: '2_pane_toggles',
+	command: {
+		id: 'workbench.action.placeholderToggle',
+		title: localize('placeholderToggleMenuLabel', "Placeholder"), // Tooltip/label for the button itself
+		icon: placeholderToggleIconOff,
+		toggled: {
+			condition: PlaceholderToggleActiveContext,
+			icon: placeholderToggleIconOn,
+			title: localize('placeholderToggleMenuLabelActive', "Placeholder Active") // Optional: different title when active
+		}
+	},
+	when: ContextKeyExpr.and(
+		IsAuxiliaryWindowContext.negate(),
+		ContextKeyExpr.or(
+			ContextKeyExpr.equals('config.workbench.layoutControl.type', 'toggles'),
+			ContextKeyExpr.equals('config.workbench.layoutControl.type', 'both')
+		)
+	),
+	order: 3 // After existing toggles (Primary Sidebar, Panel, Secondary Sidebar)
+});
+// --- End Placeholder Toggle Action
 
 export const ToggleActivityBarVisibilityActionId = 'workbench.action.toggleActivityBarVisibility';
 
